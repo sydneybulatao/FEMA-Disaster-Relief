@@ -1,0 +1,959 @@
+---
+title: "DATA200 Final Project"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+authors: Hannah Marr, Tiffany Xie, Sydney Bulatao
+course: DATA200 (Fall 2024)
+---
+######  Preliminary Work  ######
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(caret)
+
+# Import data
+acceptances <- read.csv("DisasterDeclarationsSummaries.csv")
+denials <- read.csv("DeclarationDenials.csv")
+```
+
+#####  Exploratory Analysis  #####  
+```{r}
+#### FOR 'acceptances' DATASET #####
+# Display the first few rows of the dataframe to inspect the data
+head(acceptances)
+
+# Get the dimensions of the dataframe (number of rows and columns).
+dim(acceptances)
+
+# Check for missing values in each column.
+colSums(is.na(acceptances))
+
+#### FOR 'denials' DATASET #####
+# Display the first few rows of the dataframe to inspect the data
+head(denials)
+
+# Get the dimensions of the dataframe (number of rows and columns).
+dim(denials)
+
+# Check for missing values in each column.
+colSums(is.na(denials))
+```
+We will not immediately drop rows with null values, since values in other columns in these rows may become applicable, while the columns with null values do not need to be included in analysis.
+
+#####  Cleaning the Data  ######
+First, we did a manual inspection of the column names of the 'denials' dataset and adjusted them so that the two datasets could be merged
+```{r}
+denials <- select(denials, -state) #orig, 'state' was full name not abbreviation
+```
+
+```{r}
+denials <- rename(denials,
+                  state = stateAbbreviation,
+                  declarationDate = declarationRequestDate,
+                  declarationType = declarationRequestType,
+                  declarationTitle = incidentName,
+                  incidentType = requestedIncidentTypes,
+                  incidentEndDate = requestedIncidentEndDate,
+                  )
+```
+
+```{r}
+str(denials)
+str(acceptances)
+```
+
+#####  Merging the Datasets  ######
+
+```{r}
+# Merging the two datasets
+data <- merge(denials, acceptances, by = c("state", 
+                                           "tribalRequest", 
+                                           "declarationDate", 
+                                           "declarationTitle", 
+                                           "incidentType", 
+                                           "incidentEndDate", 
+                                           "incidentId", 
+                                           "incidentBeginDate", 
+                                           "id", 
+                                           "region", 
+                                           "declarationType"), all = TRUE)
+```
+
+```{r}
+# Inspect the dataset to determine if the merge was successful
+head(data)
+
+dim(data)
+
+str(data)
+```
+###### More Data Cleaning #####
+We will add a column that designates from which dataset the data came. This column will encode the data as 'Denial' or 'Acceptance', based on if it was in the DeclarationDenials dataset ('denials') or the DisasterDeclarationSummaries dataset ('acceptances').
+
+```{r}
+# Create the new column 'requestResult'
+data$requestResult <- ifelse(is.na(data$paProgramRequested), 
+                                    'Acceptance', 
+                                    'Denial')
+```
+
+Denials data only goes back to 2000, and tribal nations were only allowed to submit their own declaration requests to FEMA in January 2013. Therefore, we will drop all data from 2012 and prior.
+
+```{r}
+# Converting the incidentBeginDate column to a date-time format and remove rows with data from before the year 2013.
+data$incidentBeginDate <- as.POSIXct(data$incidentBeginDate, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+data <- data[is.na(data$incidentBeginDate) | format(data$incidentBeginDate, "%Y") >= 2013, ]
+```
+
+```{r}
+# Inspect data to confirm no issues so far
+head(data)
+dim(data)
+```
+
+Now I will create a new column, declarationMonth, that extracts the month from the declarationDate column to specify the month in which the declaration occurred.
+
+```{r}
+data$declarationDate <- as.POSIXct(data$declarationDate, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+data$declarationMonth <- format(data$declarationDate, "%m")
+```
+
+We will do the same thing for year and create a new column, declarationYear, that extracts the year from the declarationDate column to specify the year in which the declaration occurred.
+
+```{r}
+data$declarationDate <- as.POSIXct(data$declarationDate, format = "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC")
+
+data$declarationYear <- format(data$declarationDate, "%Y")
+```
+
+```{r}
+# View the first few rows and dimensions of the updated dataset
+head(data)
+dim(data)
+```
+
+```{r}
+# Writing dataset to a csv file to save locally
+write.csv(data, "data.csv", row.names = FALSE)
+```
+
+##### Visualizing Acceptances v. Denials for FEMA Aid
+
+```{r}
+# Create a summary of the 'requestResult' column
+result_summary <- table(data$requestResult)
+
+# Convert the table to a data frame for plotting
+result_df <- as.data.frame(result_summary)
+colnames(result_df) <- c("RequestResult", "Count")
+
+# Create dynamic legend labels with counts
+legend_labels <- paste0(result_df$RequestResult, " (", result_df$Count, ")")
+
+# Plot the data using ggplot2
+ggplot(result_df, aes(x = RequestResult, y = Count, fill = RequestResult)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Comparison of Acceptances vs. Denials of FEMA aid",
+    x = "Request Result",
+    y = "Count",
+    fill = "Request Result"
+  ) +
+  scale_fill_discrete(labels = legend_labels) +  # Add custom legend labels
+  theme_minimal()
+```
+Figure 1. Comparing Overall Acceptances vs. Denials of FEMA aid, we see there are far more documented acceptances than denials of FEMA aid.
+
+#####  Visualizing Variations Among Incident Types  ######
+```{r}
+# Create a summary of the 'incidentType' column
+incident_summary <- table(data$incidentType)
+
+# Convert the summary table to a data frame for visualization
+incident_df <- as.data.frame(incident_summary)
+colnames(incident_df) <- c("IncidentType", "Count")
+
+# Plot the data using ggplot2
+ggplot(incident_df, aes(x = reorder(IncidentType, -Count), y = Count, fill = IncidentType)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Counts of Each Incident Type", x = "Incident Type", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 2. Visualizing the variation among incident types allows us to get a better sense of the various reasons for FEMA aid requests. Biological is the most prevalent incident type, followed by Hurricane, Severe Storm, and Flood.
+
+##### Examine number of tribal vs. non-tribal nation requests ######
+
+```{r}
+# Create a summary of the tribalRequest column (count 1s and 0s)
+tribal_summary <- table(data$tribalRequest)
+
+# Convert the summary table to a data frame for plotting
+tribal_df <- as.data.frame(tribal_summary)
+colnames(tribal_df) <- c("RequestType", "Count")
+
+# Map 1 to 'Tribal Requests' and 0 to 'Non-Tribal Requests'
+tribal_df$RequestType <- factor(tribal_df$RequestType, 
+                                levels = c(0, 1), 
+                                labels = c("Non-Tribal Requests", "Tribal Requests"))
+
+# Create custom labels for the legend with counts
+custom_labels <- paste(tribal_df$RequestType, " (", tribal_df$Count, ")", sep = "")
+
+# Plot the data using ggplot2
+ggplot(tribal_df, aes(x = RequestType, y = Count, fill = RequestType)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("#4DAF4A", "#377EB8"), labels = custom_labels) +
+  labs(title = "Comparison of Tribal vs. Non-Tribal Requests",
+       x = "Request Type",
+       y = "Count",
+       fill = "Request Type (Count)") +
+  theme_minimal()
+```
+Figure 3. Examining the number of tribal nation vs. non-tribal nation requests shows how infrequent tribal requests are. Part of this divide is likely due to tribal nations not being able to apply for their own declaration request until January 29, 2013. While all pre-2013 data was removed, it is likely that this process is still not as streamlined as the request process for states.
+
+Note that there are very few tribal requests. Later, we will be using LOOCV to ensure results are robust.
+
+##### Examine number of accepted aid requests for tribal nations over time #####
+
+```{r}
+# Filter data for tribal requests with 'Acceptance' in requestResult
+tribal_acceptances <- subset(data, tribalRequest == 1 & requestResult == "Acceptance")
+
+# Count acceptances by year
+acceptance_by_year <- table(tribal_acceptances$declarationYear)
+acceptance_df <- as.data.frame(acceptance_by_year)
+colnames(acceptance_df) <- c("Year", "Count")
+
+# Convert Year to a numeric type for plotting
+acceptance_df$Year <- as.numeric(as.character(acceptance_df$Year))
+
+# Plot the data
+ggplot(acceptance_df, aes(x = Year, y = Count)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  labs(title = "FEMA Aid Acceptances to Tribal Nations Over Time", 
+       x = "Year", 
+       y = "Number of Acceptances") +
+  theme_minimal()
+```
+Figure 4.1
+
+##### Examine numbre of denied aid requests for tribal nations over time ######
+
+```{r}
+# Filter data for tribal requests with 'Denial' in requestResult
+tribal_denials <- subset(data, tribalRequest == 1 & requestResult == "Denial")
+
+# Count denials by year
+denials_by_year <- table(tribal_denials$declarationYear)
+denials_df <- as.data.frame(denials_by_year)
+colnames(denials_df) <- c("Year", "Count")
+
+# Convert Year to a numeric type for plotting
+denials_df$Year <- as.numeric(as.character(denials_df$Year))
+
+# Plot the data
+ggplot(denials_df, aes(x = Year, y = Count)) +
+  geom_line(color = "red") +
+  geom_point(color = "red") +
+  labs(title = "FEMA Aid Denials to Tribal Nations Over Time", 
+       x = "Year", 
+       y = "Number of Denials") +
+  theme_minimal()
+```
+Figure 4.2. Visualizing the number of FEMA aid acceptances over time to tribal nations shows a general upward trajectory, with a sharp spike in 2020, likely due to the COVID-19 pandemic. There appear to be far fewer denials than acceptances.
+
+##### Examine FEMA aid acceptances to tribal nations over time, segmented by program type declared #####
+
+```{r}
+# Load additional necessary libraries
+library(reshape2)
+
+# Filter data for tribal requests only
+tribal_data <- subset(data, tribalRequest == 1)
+
+# Aggregate the data by year and program acceptance
+program_acceptances <- aggregate(cbind(ihProgramDeclared, iaProgramDeclared, paProgramDeclared, hmProgramDeclared) ~ declarationYear, 
+                                 data = tribal_data, 
+                                 FUN = sum)
+
+# Melt the data for plotting (long format)
+melted_data <- melt(program_acceptances, id.vars = "declarationYear", 
+                    variable.name = "ProgramType", 
+                    value.name = "Acceptances")
+
+# Map the column names to more descriptive labels
+melted_data$ProgramType <- factor(melted_data$ProgramType, 
+                                  levels = c("ihProgramDeclared", "iaProgramDeclared", "paProgramDeclared", "hmProgramDeclared"),
+                                  labels = c("Individuals and Households Program Declared",
+                                             "Individual Assistance Program Declared",
+                                             "Public Assistance Program Declared",
+                                             "Hazard Mitigation Program Declared"))
+
+# Plot the data
+ggplot(melted_data, aes(x = declarationYear, y = Acceptances, color = ProgramType)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "FEMA Aid Acceptances to Tribal Nations Over Time by Program Type",
+       x = "Year",
+       y = "Number of Acceptances",
+       color = "Program Type") +
+  theme_minimal()
+```
+Figure 5.1
+
+##### Examine FEMA aid denials to tribal nations over time, segmented by program type requested ######
+
+```{r}
+# Filter the data for tribal requests and denials
+tribal_denials <- subset(data, tribalRequest == 1 & requestResult == "Denial")
+
+# Aggregate the number of denials by year and program requested
+program_denials <- aggregate(cbind(ihProgramRequested, iaProgramRequested, paProgramRequested, hmProgramRequested) ~ declarationYear, 
+                             data = tribal_denials, 
+                             FUN = sum)
+
+# Melt the data for plotting (long format)
+melted_denials <- melt(program_denials, id.vars = "declarationYear", 
+                       variable.name = "ProgramType", 
+                       value.name = "Denials")
+
+# Map the column names to more descriptive labels
+melted_denials$ProgramType <- factor(melted_denials$ProgramType, 
+                                     levels = c("ihProgramRequested", "iaProgramRequested", "paProgramRequested", "hmProgramRequested"),
+                                     labels = c("Individuals and Households Program Requested",
+                                                "Individual Assistance Program Requested",
+                                                "Public Assistance Program Requested",
+                                                "Hazard Mitigation Program Requested"))
+
+# Plot the data
+ggplot(melted_denials, aes(x = declarationYear, y = Denials, color = ProgramType)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "FEMA Aid Denials to Tribal Nations Over Time by Program Type",
+       x = "Year",
+       y = "Number of Denials",
+       color = "Program Type") +
+  theme_minimal()
+```
+Figure 5.2. Examining the number of acceptances and denials to tribal nations over time, segmented by program type, allows for a broader understanding of what types of aid are being requested.
+
+##### Examining denials to tribal nations by state ######
+
+```{r}
+# Filter data for tribal requests with 'Denial' in requestResult
+tribal_denials <- subset(data, tribalRequest == 1 & requestResult == "Denial")
+
+# Count denials by state
+denials_by_state <- table(tribal_denials$state)
+denials_df <- as.data.frame(denials_by_state)
+colnames(denials_df) <- c("State", "Count")
+
+# Sort the data frame by Count in descending order
+denials_df <- denials_df[order(-denials_df$Count), ]
+
+# Plot the data using ggplot2
+ggplot(denials_df, aes(x = reorder(State, -Count), y = Count, fill = State)) +
+  geom_bar(stat = "identity") +
+  labs(title = "FEMA Aid Denials to Tribal Nations by State",
+       x = "State",
+       y = "Number of Denials") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 6.1
+
+##### Examining acceptances to tribal nation by state ######
+
+```{r}
+# Filter data for tribal requests with 'Acceptance' in requestResult
+tribal_acceptances <- subset(data, tribalRequest == 1 & requestResult == "Acceptance")
+
+# Count acceptances by state
+acceptances_by_state <- table(tribal_acceptances$state)
+acceptances_df <- as.data.frame(acceptances_by_state)
+colnames(acceptances_df) <- c("State", "Count")
+
+# Sort the data frame by Count in descending order
+acceptances_df <- acceptances_df[order(-acceptances_df$Count), ]
+
+# Plot the data using ggplot2
+ggplot(acceptances_df, aes(x = reorder(State, -Count), y = Count, fill = State)) +
+  geom_bar(stat = "identity") +
+  labs(title = "FEMA Aid Acceptances to Tribal Nations by State",
+       x = "State",
+       y = "Number of Acceptances") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 6.2. Examining the number of acceptances and denials to tribal nations over time, segmented by state, allows for a broader overview of where aid is being requested. Florida leads aid acceptances to tribal nations, and South Dakota leads aid denials.
+
+###### Examine acceptances to tribal nations by incident type #####
+```{r}
+# Filter data for tribal requests with 'Acceptance' in requestResult
+tribal_acceptances <- subset(data, tribalRequest == 1 & requestResult == "Acceptance")
+
+# Count acceptances by incident type
+acceptances_by_incident <- table(tribal_acceptances$incidentType)
+acceptances_df <- as.data.frame(acceptances_by_incident)
+colnames(acceptances_df) <- c("IncidentType", "Count")
+
+# Sort the data frame by Count in descending order
+acceptances_df <- acceptances_df[order(-acceptances_df$Count), ]
+
+# Plot the data using ggplot2
+ggplot(acceptances_df, aes(x = reorder(IncidentType, -Count), y = Count, fill = IncidentType)) +
+  geom_bar(stat = "identity") +
+  labs(title = "FEMA Aid Acceptances to Tribal Nations by Incident Type",
+       x = "Incident Type",
+       y = "Number of Acceptances") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 7.1
+
+##### Examining denials to tribal nations by incident type #####
+
+
+```{r}
+# Filter data for tribal requests with 'Denial' in requestResult
+tribal_denials <- subset(data, tribalRequest == 1 & requestResult == "Denial")
+
+# Count denials by incident type
+denials_by_incident <- table(tribal_denials$incidentType)
+denials_df <- as.data.frame(denials_by_incident)
+colnames(denials_df) <- c("IncidentType", "Count")
+
+# Sort the data frame by Count in descending order
+denials_df <- denials_df[order(-denials_df$Count), ]
+
+# Plot the data using ggplot2
+ggplot(denials_df, aes(x = reorder(IncidentType, -Count), y = Count, fill = IncidentType)) +
+  geom_bar(stat = "identity") +
+  labs(title = "FEMA Aid Denials to Tribal Nations by Incident Type",
+       x = "Incident Type",
+       y = "Number of Denials") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 7.2. Examining the number of acceptances and denials to tribal nations over time, segmented by incident type, allows for a broader overview of why aid is being requested. Biological incidents are most frequently rewarded aid, and Severe Storm incidents are most frequently denied aid.
+
+##### Examine the rate of denials per incident type, segmented by tribal nation vs. non-tribal nation, and scale results based on the total number of requests ######
+
+```{r}
+# Calculate total requests by incident type and tribal status
+total_requests <- data %>%
+  group_by(incidentType, tribalRequest) %>%
+  summarise(TotalRequests = n())
+
+# Filter data for denials
+denials_data <- subset(data, requestResult == "Denial")
+
+# Calculate number of denials by incident type and tribal status
+denials_count <- denials_data %>%
+  group_by(incidentType, tribalRequest) %>%
+  summarise(Denials = n())
+
+# Merge total requests and denials data
+merged_data <- merge(total_requests, denials_count, 
+                     by = c("incidentType", "tribalRequest"), 
+                     all.x = TRUE)
+
+# Replace NA values with 0 (for cases with no denials)
+merged_data$Denials[is.na(merged_data$Denials)] <- 0
+
+# Calculate the denial rate
+merged_data$DenialRate <- merged_data$Denials / merged_data$TotalRequests
+
+# Map tribalRequest values to labels
+merged_data$TribalStatus <- factor(merged_data$tribalRequest, 
+                                   levels = c(0, 1), 
+                                   labels = c("Non-Tribal", "Tribal"))
+
+# Plot the data using ggplot2
+ggplot(merged_data, aes(x = incidentType, y = DenialRate, fill = TribalStatus)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Scaled Denial Rate by Incident Type for Tribal vs. Non-Tribal Requests",
+       x = "Incident Type",
+       y = "Denial Rate",
+       fill = "Tribal Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 8.1
+
+##### Examine the rate of acceptances per incident type, segmented by tribal nation vs. non-tribal nation, and scale results based on the total number of requests #####
+
+```{r}
+# Calculate total requests by incident type and tribal status
+total_requests <- data %>%
+  group_by(incidentType, tribalRequest) %>%
+  summarise(TotalRequests = n())
+
+# Filter data for acceptances
+acceptances_data <- subset(data, requestResult == "Acceptance")
+
+# Calculate number of acceptances by incident type and tribal status
+acceptances_count <- acceptances_data %>%
+  group_by(incidentType, tribalRequest) %>%
+  summarise(Acceptances = n())
+
+# Merge total requests and acceptances data
+merged_data <- merge(total_requests, acceptances_count, 
+                     by = c("incidentType", "tribalRequest"), 
+                     all.x = TRUE)
+
+# Replace NA values with 0 (for cases with no acceptances)
+merged_data$Acceptances[is.na(merged_data$Acceptances)] <- 0
+
+# Calculate the acceptance rate
+merged_data$AcceptanceRate <- merged_data$Acceptances / merged_data$TotalRequests
+
+# Map tribalRequest values to labels
+merged_data$TribalStatus <- factor(merged_data$tribalRequest, 
+                                   levels = c(0, 1), 
+                                   labels = c("Non-Tribal", "Tribal"))
+
+# Plot the data using ggplot2
+ggplot(merged_data, aes(x = incidentType, y = AcceptanceRate, fill = TribalStatus)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Scaled Acceptance Rate by Incident Type for Tribal vs. Non-Tribal Requests",
+       x = "Incident Type",
+       y = "Acceptance Rate",
+       fill = "Tribal Status") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Figure 8.2. Examining the scaled denial rate by incident type for tribal vs. non-tribal requests, tribal requests are denied at a higher rate than non-tribal requests for all incident types for which both types of requests have been made.
+
+That concludes the exploratory data analysis. Now, we will begin building a model.
+
+##### BINARY LOGISTIC REGRESSION #####
+Our goal is to analyze the likelihood that a FEMA aid request will be denied. In particular, we want to see if the coefficient for whether it was a tribal request is high and statistically significant.
+
+First, some preliminary steps:
+```{r}
+# Import additional relevant libraries
+library(caret)
+library(pROC)
+library(dplyr)
+
+# Clean data
+# make dependent variable (request result) binary - 1 for accepted, 0 for denied
+# convert into factor for classification
+data$requestResult_binary <- ifelse(data$requestResult == "Acceptance",1,0)
+data$requestResult_binary <- factor(data$requestResult_binary, levels = c(0, 1))
+```
+
+```{r}
+# Convert incident type to numeric by manually assigning numbers to categories
+data$incidentType_numeric <- as.numeric(factor(data$incidentType, 
+                                               levels = c(unique(data$incidentType))))
+
+# Convert state to numeric by manually assigning numbers to categories 
+data$state_numeric <- as.numeric(factor(data$state, 
+                                            levels = c(unique(data$state))))
+```
+
+```{r}
+# only keep potentially relevant columns
+data_clean <- select(data, tribalRequest, incidentType_numeric, state_numeric, region, requestResult_binary)
+head(data_clean)
+```
+
+
+Then, balance our data and split into train/test sets.
+```{r}
+table(data_clean$requestResult_binary) 
+#note: there are 136 denials, 24226 acceptances
+```
+```{r}
+# filter for 0s and 1s
+zeros <- data_clean[data_clean$requestResult_binary == 0,]
+ones <- data_clean[data_clean$requestResult_binary == 1,]
+
+# sample equal number of 0's and 1's
+set.seed(35) # for reproducibility
+sample_zeros <- zeros[sample(nrow(zeros), 136), ]
+sample_ones <- ones[sample(nrow(ones), 136),]
+
+# merge the sample datasets
+data_balanced <- rbind(sample_zeros, sample_ones)
+
+# confirm done correctly
+table(data_balanced$requestResult_binary) # yes! :)
+```
+
+Now, split data into training/testing data.
+```{r}
+set.seed(57) # for reproducibility
+splitIndex <- createDataPartition(data_balanced$requestResult_binary, p = 0.7, list = FALSE)
+
+train_data <- data_balanced[splitIndex, ]
+test_data <- data_balanced[-splitIndex, ]
+```
+
+Now, we will do backward variable selection to only keep the most relevant variables in the binary logistic regression model that we train.
+
+```{r}
+# initialize model w/ all predictors included
+full_model <- glm(requestResult_binary ~ ., data = train_data, family = binomial(link="logit"))
+
+# view model with all predictors included
+summary(full_model)
+```
+Figure 9.
+
+```{r}
+# iteratively remove predictors until model no longer improves
+backward_model <- step(full_model, direction = "backward")
+
+# view model
+summary(backward_model)
+```
+Figure 10
+
+Next steps are testing our model to see how it performs.
+```{r}
+# Note: The training data does not include all types of disasters that the testing set might, since they were split based on a randomized process. To address this, we will convert those oddball results into "Other" so that we can still use our testing data!
+test_data_adj <- test_data
+
+unique_test_values <- setdiff(unique(test_data_adj$incidentType_numeric), unique(train_data$incidentType_numeric))
+
+test_data_adj$incidentType <- ifelse(test_data_adj$incidentType_numeric %in% unique_test_values, "Other", test_data_adj$incidentType_numeric)
+
+predicted_probabilities <- predict(backward_model, 
+                                   newdata = test_data_adj, 
+                                   type = "response")
+predicted_classes <- ifelse(predicted_probabilities >0.5, 1, 0) #threshold = 0.5
+
+cmatrix <- table(test_data_adj$requestResult_binary, predicted_classes)
+print(cmatrix)
+```
+Figure 11
+
+##### MODEL TUNING AND EVALUATION #####
+
+To better understand how our model's performance changes as we introduce more predictors, we will take a look at the Validation Curve, using LOOCV. This will allow us to identify if our model is overfitting or underfitting with various numbers of predictors. In addition, using LOOCV specifically will allow us to train our model more robustly, given that we have a small dataset to work with.  
+```{r}
+# LOOCV function:
+#     traindata = training dataset
+#     target = the column to predict 
+#     parameters = list of parameters to use in model
+loocv <- function(traindata, target, parameters) {
+  # for loocv, m is the size of the training data
+  m = nrow(traindata)
+  train_control = trainControl(method="cv", number=m)
+  
+  # train the model 
+  model <- train(as.formula(paste(target, parameters)),
+                 data = traindata, 
+                 method = "glm",
+                 family = binomial(link = "logit"), 
+                 trControl = train_control)
+  
+  return(model)
+}
+```
+
+
+Note: When training, the code may output "Warning: There were missing values in resampled performance measures."
+This is most likely due to a resample where one of our result classes has 0 samples, causing the code to be unable to calculate a performance metric that involves looking at both classes. 
+```{r}
+# Train the model using LOOCV. Create four iterations of the model with decreasing number of predictors.
+cv_model_full <- loocv(train_data, "requestResult_binary", "~ tribalRequest + state_numeric + incidentType_numeric + region")
+cv_model_three <- loocv(train_data, "requestResult_binary", "~ tribalRequest + state_numeric + region")
+cv_model_two <- loocv(train_data, "requestResult_binary", "~ tribalRequest + state_numeric")
+cv_model_one <- loocv(train_data, "requestResult_binary", "~ tribalRequest")
+```
+Next we will evaluate the performance of each model iteration, collecting the training and testing accuracies for each model along the way. 
+```{r}
+# Create a dataframe to hold the results to plot 
+validCurve <- data.frame(predictors = integer(4),
+                         trainAccuracy = integer(4),
+                         testAccuracy = integer(4))
+```
+
+Model equation: requestResult_binary ~ tribalRequest
+```{r}
+# Evaluate the model with one predictor
+validCurve$predictors[1] <- 1
+validCurve$trainAccuracy[1] <- cv_model_one$results$Accuracy 
+
+# Predict on testing data
+test_data_one <- test_data_adj %>% dplyr::select(requestResult_binary, tribalRequest)
+predicted_probabilities <- predict(cv_model_one, 
+                                   newdata = test_data_one, 
+                                   type = "prob")
+predicted_classes <- ifelse(predicted_probabilities$'1' > 0.5, 1, 0) #threshold = 0.5
+predicted_classes <- factor(predicted_classes, levels=c(0,1)) 
+  
+correct_predictions <- sum(predicted_classes == test_data_one$requestResult_binary)
+total_observations <- nrow(test_data_one)
+validCurve$testAccuracy[1] <- correct_predictions / total_observations
+```
+
+Model equation: requestResult_binary ~ tribalRequest + state_numeric
+```{r}
+# Evaluate the model with two predictors
+validCurve$predictors[2] <- 2
+validCurve$trainAccuracy[2] <- cv_model_two$results$Accuracy 
+
+# Predict on testing data
+test_data_two <- test_data_adj %>% dplyr::select(requestResult_binary, tribalRequest, state_numeric)
+predicted_probabilities <- predict(cv_model_two, 
+                                   newdata = test_data_two, 
+                                   type = "prob")
+predicted_classes <- ifelse(predicted_probabilities$'1' > 0.5, 1, 0) #threshold = 0.5
+predicted_classes <- factor(predicted_classes, levels=c(0,1)) 
+  
+correct_predictions <- sum(predicted_classes == test_data_two$requestResult_binary)
+total_observations <- nrow(test_data_two)
+validCurve$testAccuracy[2] <- correct_predictions / total_observations
+```
+
+Model equation: requestResult_binary ~ tribalRequest + state_numeric + region
+```{r}
+# Evaluate the model with three predictors
+validCurve$predictors[3] <- 3
+validCurve$trainAccuracy[3] <- cv_model_three$results$Accuracy 
+
+# Predict on testing data
+test_data_three <- test_data_adj %>% dplyr::select(requestResult_binary, tribalRequest, state_numeric, region)
+predicted_probabilities <- predict(cv_model_three, 
+                                   newdata = test_data_three, 
+                                   type = "prob")
+predicted_classes <- ifelse(predicted_probabilities$'1' > 0.5, 1, 0) #threshold = 0.5
+predicted_classes <- factor(predicted_classes, levels=c(0,1)) 
+  
+correct_predictions <- sum(predicted_classes == test_data_three$requestResult_binary)
+total_observations <- nrow(test_data_three)
+validCurve$testAccuracy[3] <- correct_predictions / total_observations
+```
+
+Model equation: requestResult_binary ~ tribalRequest + state_numeric + incidentType_numeric + region
+```{r}
+# Evaluate the model with all predictors
+validCurve$predictors[4] <- 4
+validCurve$trainAccuracy[4] <- cv_model_full$results$Accuracy 
+
+# Predict on testing data
+test_data_full <- test_data_adj %>% dplyr::select(requestResult_binary, tribalRequest, state_numeric, region, incidentType_numeric)
+predicted_probabilities <- predict(cv_model_full, 
+                                   newdata = test_data_full, 
+                                   type = "prob")
+predicted_classes <- ifelse(predicted_probabilities$'1' > 0.5, 1, 0) #threshold = 0.5
+predicted_classes <- factor(predicted_classes, levels=c(0,1)) 
+  
+correct_predictions <- sum(predicted_classes == test_data_full$requestResult_binary)
+total_observations <- nrow(test_data_full)
+validCurve$testAccuracy[4] <- correct_predictions / total_observations
+```
+
+```{r}
+# View the results
+head(validCurve)
+
+# Plot the validation curve
+ggplot(validCurve, aes(x = predictors)) +
+  geom_line(aes(y = trainAccuracy, col = "Training Accuracy")) +
+  geom_point(aes(y = trainAccuracy, col = "Training Accuracy")) +
+  geom_line(aes(y = testAccuracy, col = 'Testing Accuracy')) +
+  geom_point(aes(y = testAccuracy, col='Testing Accuracy')) +
+  labs(title = "Validation Curve for Logistic Regression of FEMA Acceptance or Denial", 
+       x = "Model Parameters", 
+       y = "Accuracy") +
+  theme_minimal() +
+  ylim(0,1) + 
+  guides(fill = guide_legend(reverse=TRUE)) + 
+  scale_color_discrete(name = "")
+```
+Figure 12
+
+As we can see in the validation curve, there is not significant variation in the testing vs. training accuracies for the differing number of model parameters. We can see that the testing accuracy and training accuracy are closest in value for the model with 1 parameter and the model with 4 parameters. We will continue analyzing the model with 4 parameters to get a better sense of its overall performance. 
+
+For our final model, we will take a look at some classification metrics to evaluate its overall performance. We will calculate the metrics based on the correct classification of the accepted request class. 
+
+Here we see that the accuracy is 0.56, with 45 samples classified correctly and 35 samples classified incorrectly. 
+```{r}
+# Confusion Matrix 
+cm <- confusionMatrix(predicted_classes, test_data_full$requestResult_binary)
+cm
+```
+Figure 13
+
+The precision is 0.56, meaning that 56% of the samples that the model classified as accepted requests were correctly identified as accepted requests. 
+The recall is 0.55, meaning that 55% of the samples that are actually accepted requests were correctly identified as accepted requests. 
+The F1 score, which takes into account both precision and recall, is 0.56.
+```{r}
+# Overall evaluation metrics
+cm$byClass
+```
+Figure 14
+
+Finally, we can see in the model summary that the tribalRequest parameter is statistically significant with a p-value of 0.0132. 
+```{r}
+# Look at model summary 
+summary(cv_model_full)
+```
+Figure 15
+
+### OVERALL LOGISTIC REGRESSION CONCLUSIONS ###
+Overall, the metrics above mean that our model is not currently able to learn how to classify FEMA requests into acceptances or denials. While we tried to combat this with our use of LOOCV, this is most likely due to our dataset being too small to adequately train our model with. However, the finding that the tribalRequest parameter is statistically significant is important to our research question in that it indicates that whether or not a request was made by a Tribal Nation is significant to if the request is denied or accepted. 
+
+
+### RANDOM FOREST MODEL ###
+Given that our accuracy is fairly low from a binary logistic regression model, we will employ a random forest model to attempt to better learn how to classify FEMA requests into acceptances or denials.
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(randomForest)
+library(caret)
+library(ggplot2)
+```
+```{r}
+# Create new columns for the model
+data <- data %>%
+  mutate(
+    requestResult_binary = factor(ifelse(requestResult == "Acceptance", 1, 0), levels = c(0, 1)),
+    tribalRequest_factor = as.factor(tribalRequest),
+    incidentType_numeric = as.numeric(factor(incidentType)),
+    state_numeric = as.numeric(factor(state))
+  )
+
+# Select relevant columns for the model
+data_RF <- select(data, tribalRequest_factor, incidentType_numeric, state_numeric, region, requestResult_binary)
+
+# View first few rows of Random Forest dataset
+head(data_RF)
+```
+```{r}
+# Balance the dataset 
+# filter for 0s and 1s
+zeros <- data_RF[data_RF$requestResult_binary == 0,]
+ones <- data_RF[data_RF$requestResult_binary == 1,]
+
+# sample equal number of 0's and 1's
+set.seed(35) # for reproducibility
+sample_zeros <- zeros[sample(nrow(zeros), 136), ]
+sample_ones <- ones[sample(nrow(ones), 136),]
+
+# merge the sample datasets
+data_RF_balanced <- rbind(sample_zeros, sample_ones)
+
+# confirm done correctly
+table(data_RF_balanced$requestResult_binary) # yes! :)
+```
+
+
+```{r}
+# Split the data into training and test sets
+set.seed(123)
+train_index <- createDataPartition(data_RF_balanced$requestResult_binary, p = 0.7, list = FALSE)
+train_data <- data_RF_balanced[train_index, ]
+test_data <- data_RF_balanced[-train_index, ]
+```
+
+```{r}
+# Train the Random Forest model
+rf_model <- randomForest(requestResult_binary ~ ., data = train_data, importance = TRUE, ntree = 500)
+
+# Model summary
+print(rf_model)
+```
+Figure 16
+
+```{r}
+# Predict on the test data
+predictions <- predict(rf_model, test_data)
+
+# Confusion Matrix
+confusion <- confusionMatrix(predictions, test_data$requestResult_binary)
+print(confusion)
+```
+Figure 17
+
+```{r}
+# Accuracy
+accuracy <- confusion$overall['Accuracy']
+cat("Accuracy:", accuracy, "\n")
+```
+```{r}
+# Feature Importance Visualization
+importance <- as.data.frame(importance(rf_model))
+importance <- importance %>% rownames_to_column(var = "Feature")
+ggplot(importance, aes(x = reorder(Feature, MeanDecreaseGini), y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  coord_flip() +
+  labs(title = "Feature Importance (Mean Decrease Gini)", x = "Features", y = "Importance") +
+  theme_minimal()
+```
+Figure 18
+
+```{r}
+# Calculate Mean Squared Error (MSE)
+mse <- mean((as.numeric(as.character(predictions)) - as.numeric(as.character(test_data$requestResult_binary)))^2)
+cat("Mean Squared Error (MSE):", mse, "\n")
+```
+```{r}
+# Plotting Error Rate Across Trees
+error_rates <- data.frame(Trees = 1:rf_model$ntree,
+                          OOB_Error = rf_model$err.rate[, 1]) # OOB Error (1st column in err.rate)
+
+ggplot(error_rates, aes(x = Trees, y = OOB_Error)) +
+  geom_line(color = "blue") +
+  labs(title = "OOB Error Rate Across Trees", x = "Number of Trees", y = "OOB Error Rate") +
+  theme_minimal()
+```
+Figure 19. The optimal number of trees to reduce OOB error is around 100 trees. 
+```{r}
+# Train the Random Forest model with 125 trees
+tuned_rf <- randomForest(requestResult_binary ~ ., data = train_data, importance = TRUE, ntree = 125)
+
+# Model summary
+print(tuned_rf)
+```
+Figure 20
+
+```{r}
+# Predict on the test data
+predictions <- predict(tuned_rf, test_data)
+
+# Confusion Matrix
+confusion <- confusionMatrix(predictions, test_data$requestResult_binary)
+print(confusion)
+```
+Figure 21
+
+```{r}
+# Accuracy
+accuracy <- confusion$overall['Accuracy']
+cat("Tuned Model Accuracy:", accuracy, "\n")
+```
+
+```{r}
+# Feature Importance Visualization
+importance <- as.data.frame(importance(tuned_rf))
+importance <- importance %>% rownames_to_column(var = "Feature")
+ggplot(importance, aes(x = reorder(Feature, MeanDecreaseGini), y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  coord_flip() +
+  labs(title = "Feature Importance (Mean Decrease Gini) - Tuned Model", x = "Features", y = "Importance") +
+  theme_minimal()
+```
+Figure 22
+
+### OVERALL RANDOM FOREST CONCLUSIONS ###
+Overall, this model has a better accuracy than the previous logistic regression model, with a score of 0.7. The incident type was found to be the most important feature to split on within the random forest decision trees, followed by the state, region, and then if the request was a tribal request. The importance of the incident type compared to if the request was a tribal request is roughly 45 compared to 5, respectively. This result indicates that if the request was from a tribal nation was not found to be as significant of a determining factor in an acceptance or denial compared to the other features included. 
+
+The out-of-bag error rate graph shows that the error decreases from 0 to 100 trees, then increases around 200 to 350 trees, then decreases again for 400 to 500 trees. This indicates that the optimal number of trees to limit the out-of-bag error rate is around 100-125 or 500. To limit redundancy and increase efficiency, it would be best to use the smaller number of trees.
+
+The model was rebuilt with 125 trees, and achieved an accuracy of 0.7. This result shows that the reduction in trees did not negatively affect the correct classification of the testing data, allowing us to reduce unnecessary complexity. The feature importances found for this new model were very similar to the initial model's, showing consistency in the results. 
